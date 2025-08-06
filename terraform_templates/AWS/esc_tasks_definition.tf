@@ -4,16 +4,15 @@ resource "aws_ecs_task_definition" "app" {
   family             = "marble"
   task_role_arn      = aws_iam_role.ecs_task_role.arn
   execution_role_arn = aws_iam_role.ecs_exec_role.arn
-  network_mode       = "bridge"
-  memory             = 256
+  network_mode       = "awsvpc"
+  cpu                = 2048
+  memory             = 4096
 
   container_definitions = jsonencode([{
     name         = "app",
     image        = local.environment.frontend.image,
     essential    = true,
     portMappings = [{ containerPort = 3000, hostPort = 3000 }],
-
-
 
     environment = [
       { name = "PORT", value = "3000" },
@@ -51,28 +50,30 @@ resource "aws_ecs_task_definition" "app" {
       essential    = true,
       portMappings = [{ containerPort = 8080, hostPort = 8080 }],
 
-      entryPoint : ["./app", "--server", "--migrations"],
+      entryPoint : ["/bin/sh", "-c", "echo $GOOGLE_CREDENTIALS_JSON > /tmp/credentials.json && ./app --server --migrations"],
 
       environment = [
+        { name = "DEPLOYMENT_VERSION", value = "0.0.2" },
         { name = "ENV", value = "production" },
         { name = "NODE_ENV", value = "production" },
-        { name = "PG_HOSTNAME", value = "${element(split(":", aws_db_instance.rds-marble.endpoint), 0)}" },
-        { name = "PG_PORT", value = "${element(split(":", aws_db_instance.rds-marble.endpoint), 1)}" },
-        { name = "PG_USER", value = "postgres" },
-        { name = "PG_PASSWORD", value = "${random_string.rds-db-password.result}" },
-        { name = "GOOGLE_APPLICATION_CREDENTIALS", value = "/config/credentials.json" },
+        { name = "DISABLE_SEGMENT", value = "true" },
+        { name = "PG_HOSTNAME", value = local.environment.database.host },
+        { name = "PG_PORT", value = local.environment.database.port },
+        { name = "PG_USER", value = local.environment.database.username },
+        { name = "PG_PASSWORD", value = local.environment.database.password },
+        { name = "GOOGLE_APPLICATION_CREDENTIALS", value = "/tmp/credentials.json" },
+        { name = "GOOGLE_CREDENTIALS_JSON", value = "${file("config/credentials.json")}" },
         { name = "GOOGLE_CLOUD_PROJECT", value = local.environment.firebase.projectId },
         { name = "CREATE_GLOBAL_ADMIN_EMAIL", value = local.environment.org.global },
         { name = "CREATE_ORG_NAME", value = local.environment.org.name },
         { name = "CREATE_ORG_ADMIN_EMAIL", value = local.environment.org.admin },
-        { name = "MARBLE_APP_URL", value = local.environment.frontend.domain },
+        { name = "MARBLE_APP_URL", value = local.environment.frontend.url },
         { name = "MARBLE_BACKOFFICE_HOST", value = local.environment.backend.domain },
         { name = "SESSION_SECRET", value = local.environment.session.secret },
         { name = "SESSION_MAX_AGE", value = local.environment.session.max_age },
         { name = "LICENSE_KEY", value = local.environment.licence_key },
         { name = "SENTRY_ENVIRONMENT", value = local.environment.sentry.backend.env },
         { name = "SENTRY_DSN", value = local.environment.sentry.backend.dsn },
-        { name = "SEGMENT_WRITE_KEY", value = local.environment.segment_write_key.backend },
         { name = "AUTHENTICATION_JWT_SIGNING_KEY", value = "${file("config/private.key")}" }
       ]
 
@@ -83,34 +84,33 @@ resource "aws_ecs_task_definition" "app" {
           "awslogs-group"         = aws_cloudwatch_log_group.ecs.name,
           "awslogs-stream-prefix" = "marble-api"
         }
-      },
+      }
 
-      mountPoints : [
-        { "sourceVolume" : "config-volume", "containerPath" : "/config" }
-      ]
-
-
-      depends_on = [aws_db_instance.rds-marble]
+      # depends_on = [aws_db_instance.rds-marble]
     },
     {
       name      = "cron",
       image     = local.environment.backend.image,
       essential = true,
 
-      entryPoint : ["./app", "--worker"],
+      entryPoint : ["/bin/sh", "-c", "echo $GOOGLE_CREDENTIALS_JSON > /tmp/credentials.json && ./app --worker"],
 
       environment = [
         { name = "ENV", value = "production" },
         { name = "NODE_ENV", value = "production" },
-        { name = "PG_HOSTNAME", value = "${element(split(":", aws_db_instance.rds-marble.endpoint), 0)}" },
-        { name = "PG_PORT", value = "${element(split(":", aws_db_instance.rds-marble.endpoint), 1)}" },
-        { name = "PG_USER", value = "postgres" },
-        { name = "PG_PASSWORD", value = "${random_string.rds-db-password.result}" },
-        # { name = "INGESTION_BUCKET_URL", value = "data-ingestion-bucket" },
-        { name = "AWS_REGION", value = var.aws_region },
-        { name = "AWS_ACCESS_KEY", value = var.aws_access_key_id },
-        { name = "AWS_SECRET_KEY", value = var.aws_secret_access_key },
+        { name = "PG_HOSTNAME", value = local.environment.database.host },
+        { name = "PG_PORT", value = local.environment.database.port },
+        { name = "PG_USER", value = local.environment.database.username },
+        { name = "PG_PASSWORD", value = local.environment.database.password },
+        { name = "GOOGLE_APPLICATION_CREDENTIALS", value = "/tmp/credentials.json" },
+        { name = "GOOGLE_CREDENTIALS_JSON", value = "${file("config/credentials.json")}" },
+        { name = "GOOGLE_CLOUD_PROJECT", value = local.environment.firebase.projectId },
+        { name = "INGESTION_BUCKET_URL", value = local.environment.cron.s3 },
+        # { name = "AWS_REGION", value = var.aws_region },
+        # { name = "AWS_ACCESS_KEY", value = var.aws_access_key_id },
+        # { name = "AWS_SECRET_KEY", value = var.aws_secret_access_key },
         { name = "LICENSE_KEY", value = local.environment.licence_key },
+        { name = "MARBLE_APP_URL", value = local.environment.frontend.url },
         { name = "SENTRY_ENVIRONMENT", value = local.environment.sentry.backend.env },
         { name = "SENTRY_DSN", value = local.environment.sentry.backend.dsn },
       ]
@@ -122,16 +122,10 @@ resource "aws_ecs_task_definition" "app" {
           "awslogs-group"         = aws_cloudwatch_log_group.ecs.name,
           "awslogs-stream-prefix" = "marble-cron"
         }
-      },
+      }
 
-      depends_on = [aws_db_instance.rds-marble]
-  }])
-
-  volume {
-    name      = "config-volume"
-    host_path = "/tmp"
-  }
+      # depends_on = [aws_db_instance.rds-marble]
+    }
+  ])
 
 }
-
-
